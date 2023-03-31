@@ -25,7 +25,7 @@ void afisare(uint32_t addr) {
 iphdr *get_iphdr(ether_header* frame) {
 	iphdr *header = NULL;
 	if (ntohs(frame->ether_type) == 0x0800) {
-		header = (iphdr *)(frame + sizeof(ether_header));
+		header = (iphdr *)((char*)frame + sizeof(ether_header));
 	}
 	return header;
 }
@@ -38,7 +38,7 @@ icmphdr *get_icmphdr(ether_header* frame) {
 arp_header *get_arphdr(ether_header* frame) {
 	arp_header *header = NULL;
 	if (ntohs(frame->ether_type) == 0x0806) {
-		header = (arp_header *)(frame + sizeof(ether_header));
+		header = (arp_header *)((char*)frame + sizeof(ether_header));
 	}
 	return header;
 }
@@ -133,10 +133,11 @@ int main(int argc, char *argv[]) {
 			// Check for correct checksum
 			if (local_checksum != pack_checksum) {
 				printf("--Invalid IPv4 Checksum--\n");
-				printf("local--%d\n", local_checksum);
-				printf("pack--%d\n", pack_checksum);
+				printf("--local: %X--\n", local_checksum);
+				printf("--pack: %X--\n", pack_checksum);
 				continue;
 			}
+			
 			uint8_t old_ttl = ip_hdr->ttl;
 			// Check for valid TTL
 			if (old_ttl < 2) {
@@ -161,8 +162,9 @@ int main(int argc, char *argv[]) {
 			ip_hdr->check = htons(new_checksum);
 			// Updated source and destination mac in ETH header
 			get_interface_mac(next_route->interface, (eth_hdr->ether_shost));
+			arp_entry* next_arp = get_arp_entry(ntohl(next_route->next_hop));
 			for (int i = 0; i < 6; i++)
-				eth_hdr->ether_dhost[i] = get_arp_entry(next_route->next_hop)->mac[i];
+				eth_hdr->ether_dhost[i] = next_arp->mac[i];
 				
 			send_to_link(next_route->interface, buf, len);
 
