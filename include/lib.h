@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define MAX_PACKET_LEN 1600
 #define ROUTER_NUM_INTERFACES 3

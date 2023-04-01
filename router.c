@@ -12,14 +12,13 @@ typedef struct arp_entry arp_entry;
 #define MAX_RTABLE_LEN 100000
 
 rtable_entry *rtable;
-int rtable_len;
+int rtable_len = 0;
 
 arp_entry *arp_table;
-int arp_table_len;
-
+int arp_table_len = 0;
 
 void afisare(uint32_t addr) {
-	printf("%d.%d.%d.%d\n", (addr>>24)&0x00ff, (addr>>16)&0x00ff,(addr>>8)&0x00ff,addr&0x00ff);
+	printf("%d.%d.%d.%d\n", (addr>>24)&0xff, (addr>>16)&0xff,(addr>>8)&0xff,addr&0xff);
 }
 
 iphdr *get_iphdr(ether_header* frame) {
@@ -43,12 +42,34 @@ arp_header *get_arphdr(ether_header* frame) {
 	return header;
 }
 
+void generate_eth_header(ether_header* buf, uint16_t eth_type, uint8_t *source, uint8_t *target) {
+	for (int i = 0; i < 6; i++) {
+		buf->ether_shost[i] = source[i];
+		buf->ether_dhost[i] = target[i];
+	}
+	buf->ether_type = eth_type;
+}
+
+void generate_arp_request(arp_header* arp_hdr, uint8_t *sha, uint32_t spa, uint32_t tpa) {
+	arp_hdr->hlen = 6;
+	arp_hdr->htype = htons(1);
+	arp_hdr->op = htons(1);
+	arp_hdr->plen = 4;
+	arp_hdr->ptype = htons(0x0800);
+
+	memcpy(arp_hdr->sha, sha, 6);
+	arp_hdr->spa = htonl(spa);
+	memset(arp_hdr->tha, 0x00, 6);
+	arp_hdr->tpa = htonl(tpa);
+}
+
 // Liniar LPM, needs to be improved
 rtable_entry *get_best_route(uint32_t ip_dest) {
 	rtable_entry *next = NULL;
 	uint32_t best = 0;
 	for (int i = 0; i < rtable_len; i++) {
-			if ((ntohl(rtable[i].mask) & ip_dest) == ntohl(rtable[i].prefix) && best < ntohl(rtable[i].mask)) {
+			if ((ntohl(rtable[i].mask) & ip_dest) == 
+			ntohl(rtable[i].prefix) && best < ntohl(rtable[i].mask)) {
 				next = &(rtable[i]);
 				best = ntohl(rtable[i].mask);
 		}
@@ -65,6 +86,11 @@ arp_entry *get_arp_entry(uint32_t ip_dest) {
 	return NULL;
 }
 
+uint32_t ip_to_uint32(char* ip_address) {
+    struct in_addr addr;
+    inet_pton(AF_INET, ip_address, &addr);
+    return ntohl(addr.s_addr);
+}
 
 int main(int argc, char *argv[]) {
 	rtable = malloc(sizeof(rtable_entry) * MAX_RTABLE_LEN);
@@ -74,7 +100,8 @@ int main(int argc, char *argv[]) {
 	DIE(arp_table == NULL, "arptable memory");
 
 	rtable_len = read_rtable(argv[1], rtable);
-	arp_table_len = parse_arp_table("arp_table.txt", arp_table);
+	// arp_table_len = parse_arp_table("arp_table.txt", arp_table);
+	queue arp_queue = queue_create();
 
 	int interface;
 	char buf[MAX_PACKET_LEN];
@@ -82,8 +109,8 @@ int main(int argc, char *argv[]) {
 
 	// Do not modify this line
 	init(argc - 2, argv + 2);
-
-
+	
+	
 	while (1) {
 		interface = recv_from_any_link(buf, &len);
 		DIE(interface < 0, "recv_from_any_links");
@@ -108,14 +135,14 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
-		uint8_t temp = 1; 
+		uint8_t broadcast_check = 1; 
 		for (int i = 0; i < 6; i++) {
 			if (0 == eth_hdr->ether_dhost[i]) {
-				temp = 0;
+				broadcast_check = 0;
 				break;
 			}
 		}
-		if (temp == 1)
+		if (broadcast_check == 1)
 			correct_destination = 1;
 
 		// Check for correct MAC address destination
@@ -126,6 +153,7 @@ int main(int argc, char *argv[]) {
 		
 		// IPv4 payload
 		if (ip_hdr != NULL) {
+			printf("IPv4 implementation\n");
 			uint16_t local_checksum = 0;
 			uint16_t pack_checksum = ntohs(ip_hdr->check);
 			ip_hdr->check = 0;
@@ -137,7 +165,7 @@ int main(int argc, char *argv[]) {
 				printf("--pack: %X--\n", pack_checksum);
 				continue;
 			}
-			
+			printf("check\n");
 			uint8_t old_ttl = ip_hdr->ttl;
 			// Check for valid TTL
 			if (old_ttl < 2) {
@@ -147,7 +175,7 @@ int main(int argc, char *argv[]) {
 			}
 			// Updated TTL
 			ip_hdr->ttl--;
-
+			printf("ttl\n");
 			// Check for next route
 			rtable_entry *next_route = get_best_route(ntohl(ip_hdr->daddr));
 			if (next_route == NULL) {
@@ -155,27 +183,59 @@ int main(int argc, char *argv[]) {
 				// TODO: Implementare mesaj ICMP "Destination unreachable"
 				continue;
 			}
-			
+			printf("route\n");
 			// Updated checksum
 			ip_hdr->check = 0;
 			uint16_t new_checksum = checksum((uint16_t*)ip_hdr, sizeof(iphdr));
 			ip_hdr->check = htons(new_checksum);
 			// Updated source and destination mac in ETH header
-			get_interface_mac(next_route->interface, (eth_hdr->ether_shost));
 			arp_entry* next_arp = get_arp_entry(ntohl(next_route->next_hop));
+			printf("newcheck\n");
+			// ARP Table returned NULL, queue packet and generate ARP
+			if (next_arp == NULL) {
+				printf("entered arp reqgen\n");
+				char* packet = calloc(MAX_PACKET_LEN, sizeof(char));
+				memcpy(packet, buf, MAX_PACKET_LEN);
+				queue_enq(arp_queue, packet);
+
+
+				uint32_t tpa = ntohl(ip_hdr->daddr);
+				// Generated a new packet for ARP request
+				memset(buf, 0x00, MAX_PACKET_LEN);
+				uint8_t target[6];
+				uint8_t source[6];
+				get_interface_mac(next_route->interface, source);
+				memset(target, 0xff, 6);
+				
+				generate_eth_header(eth_hdr, htons(0x0806), source, target);
+				arp_hdr = get_arphdr(eth_hdr);
+
+				uint32_t spa = ip_to_uint32(get_interface_ip(interface));
+				generate_arp_request(arp_hdr, source, spa, tpa);
+
+				for (int i = 0; i < ROUTER_NUM_INTERFACES; i++) {
+					send_to_link(i, buf, sizeof(ether_header) + sizeof(arp_header));
+				}
+				printf("sent requests\n");
+				continue;
+			}
+			printf("arp req generated\n");
+			
+			get_interface_mac(next_route->interface, (eth_hdr->ether_shost));
 			for (int i = 0; i < 6; i++)
 				eth_hdr->ether_dhost[i] = next_arp->mac[i];
-				
+			
 			send_to_link(next_route->interface, buf, len);
 
 		}
 
 		if (arp_hdr != NULL) {
-			printf("ARP implementation");
+			printf("Got ARP Request on Router\n");
+			printf("ARP implementation\n");
 		}
 
 		if (icmp_hdr != NULL) {
-			printf("ICMP implementation");
+			printf("ICMP implementation\n");
 		}
 
 		printf("--Implementation ends here--\n");
