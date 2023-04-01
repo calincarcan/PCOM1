@@ -11,6 +11,11 @@ typedef struct route_table_entry rtable_entry;
 typedef struct arp_entry arp_entry;
 #define MAX_RTABLE_LEN 100000
 
+struct queued_pack {
+	uint8_t pack[MAX_PACKET_LEN];
+	size_t pack_size;
+};
+
 rtable_entry *rtable;
 int rtable_len = 0;
 
@@ -42,6 +47,14 @@ arp_header *get_arphdr(ether_header* frame) {
 	return header;
 }
 
+arp_entry generate_arp_entry(uint32_t ip, uint8_t *mac) {
+	arp_entry entry;
+	entry.ip = htonl(ip);
+	memcpy(entry.mac, mac, 6);
+
+	return entry;
+}
+
 void generate_eth_header(ether_header* buf, uint16_t eth_type, uint8_t *source, uint8_t *target) {
 	for (int i = 0; i < 6; i++) {
 		buf->ether_shost[i] = source[i];
@@ -60,6 +73,19 @@ void generate_arp_request(arp_header* arp_hdr, uint8_t *sha, uint32_t spa, uint3
 	memcpy(arp_hdr->sha, sha, 6);
 	arp_hdr->spa = htonl(spa);
 	memset(arp_hdr->tha, 0x00, 6);
+	arp_hdr->tpa = htonl(tpa);
+}
+
+void generate_arp_reply(arp_header* arp_hdr, uint8_t *sha, uint8_t *tha, uint32_t spa, uint32_t tpa) {
+	arp_hdr->hlen = 6;
+	arp_hdr->htype = htons(1);
+	arp_hdr->op = htons(2);
+	arp_hdr->plen = 4;
+	arp_hdr->ptype = htons(0x0800);
+
+	memcpy(arp_hdr->sha, sha, 6);
+	arp_hdr->spa = htonl(spa);
+	memcpy(arp_hdr->tha, tha, 6);
 	arp_hdr->tpa = htonl(tpa);
 }
 
@@ -194,51 +220,142 @@ int main(int argc, char *argv[]) {
 			// ARP Table returned NULL, queue packet and generate ARP
 			if (next_arp == NULL) {
 				printf("entered arp reqgen\n");
-				char* packet = calloc(MAX_PACKET_LEN, sizeof(char));
-				memcpy(packet, buf, MAX_PACKET_LEN);
+				struct queued_pack *packet = calloc(1, sizeof(struct queued_pack));
+				memcpy(packet->pack, buf, MAX_PACKET_LEN);
+				packet->pack_size = len;
 				queue_enq(arp_queue, packet);
 
-
-				uint32_t tpa = ntohl(ip_hdr->daddr);
+				uint32_t tpa = ntohl(next_route->next_hop);
 				// Generated a new packet for ARP request
 				memset(buf, 0x00, MAX_PACKET_LEN);
 				uint8_t target[6];
 				uint8_t source[6];
-				get_interface_mac(next_route->interface, source);
 				memset(target, 0xff, 6);
-				
+				get_interface_mac(next_route->interface, source);
+				uint32_t spa = ip_to_uint32(get_interface_ip(next_route->interface));
+
 				generate_eth_header(eth_hdr, htons(0x0806), source, target);
 				arp_hdr = get_arphdr(eth_hdr);
 
-				uint32_t spa = ip_to_uint32(get_interface_ip(interface));
 				generate_arp_request(arp_hdr, source, spa, tpa);
+				send_to_link(next_route->interface, buf, sizeof(ether_header) + sizeof(arp_header));
 
-				for (int i = 0; i < ROUTER_NUM_INTERFACES; i++) {
-					send_to_link(i, buf, sizeof(ether_header) + sizeof(arp_header));
-				}
-				printf("sent requests\n");
+				printf("sent request\n");
 				continue;
 			}
-			printf("arp req generated\n");
+			printf("found next arp\n");
 			
 			get_interface_mac(next_route->interface, (eth_hdr->ether_shost));
-			for (int i = 0; i < 6; i++)
-				eth_hdr->ether_dhost[i] = next_arp->mac[i];
+			memcpy(eth_hdr->ether_dhost, next_arp->mac, 6);
 			
 			send_to_link(next_route->interface, buf, len);
-
+			continue;
 		}
-
+		
+		
 		if (arp_hdr != NULL) {
-			printf("Got ARP Request on Router\n");
+			printf("Got ARP Header\n");
+			
+			uint16_t op = ntohs(arp_hdr->op);
+
+			// arp op 1 -- Request
+			// Request => trimit un reply
+			if (op == 1) {
+				printf("Got ARP Request\n");
+				uint32_t searched_ip = ntohl(arp_hdr->tpa);
+				uint32_t local_ip = ip_to_uint32(get_interface_ip(interface));
+				// Check if the router is the target ip
+				// then build ARP Reply
+				afisare(searched_ip);
+				afisare(local_ip);
+				if (searched_ip == local_ip) {
+					uint8_t l2_target[6];
+					uint8_t l2_source[6];
+					uint32_t s_ip = ntohl(arp_hdr->spa);
+					uint32_t t_ip = ntohl(arp_hdr->tpa);
+					uint8_t l3_source[6]; // mac sursa de la care a venit request
+					
+					//! l3_source cred ca ar putea fi 0x00000
+					memcpy(l3_source, arp_hdr->sha, 6);
+					memcpy(l2_target, eth_hdr->ether_shost, 6);
+
+					memset(buf, 0x00, MAX_PACKET_LEN);
+					get_interface_mac(interface, l2_source);
+
+					generate_eth_header(eth_hdr, htons(0x0806), l2_source, l2_target);
+					
+					// generate ARP Reply header
+					arp_hdr = get_arphdr(eth_hdr);
+					/*
+					sha - mac interfata curenta, l2_source
+					tha - mac pe care a venit, l3_source
+					spa - ip interfata curenta, t_ip
+					tpa - ip pe care a venit, s_ip
+					*/
+					generate_arp_reply(arp_hdr, l2_source, l3_source, t_ip, s_ip);
+					printf("Sent ARP Reply\n");
+					send_to_link(interface, buf, sizeof(ether_header) + sizeof(arp_header));
+					continue;
+				}
+				continue;
+			}
+
+			// arp op 2 -- Reply
+			// Reply => adaug in cache, trimit pachetul din queue
+			if (op == 2) {
+				printf("Got ARP Reply\n");
+				uint8_t mac_replied[6];
+				memcpy(mac_replied, arp_hdr->sha, 6);
+				uint32_t ip_replied = ntohl(arp_hdr->spa);
+				arp_entry arp_reply = generate_arp_entry(ip_replied, mac_replied);
+
+				// Check if the ARP entry already is in the cache
+				int found = 0;
+				for(int i = 0; i < arp_table_len; i++) {
+					int same_mac = memcmp(arp_table[i].mac, arp_reply.mac, 6);
+					if (arp_table[i].ip == arp_reply.ip && same_mac == 0) {
+						found = 1;
+						break;
+					}
+				}
+				if (found == 1) {
+					printf("found is 1\n");
+				}
+				if (found == 0) {
+					// ARP reply added to cache
+					arp_table[arp_table_len++] = arp_reply;
+					memset(buf, 0x00, MAX_PACKET_LEN);
+					struct queued_pack *queued_pack = queue_deq(arp_queue);
+					memcpy(buf, queued_pack->pack, queued_pack->pack_size);
+					ip_hdr = get_iphdr(eth_hdr);
+
+					rtable_entry *next_route = get_best_route(ntohl(ip_hdr->daddr));
+					if (next_route == NULL) {
+						printf("--Next Route Not Found--\n");
+						// TODO: Implementare mesaj ICMP "Destination unreachable"
+						continue;
+					}
+
+					uint8_t source_mac[6];
+					get_interface_mac(next_route->interface, source_mac);
+					memcpy(eth_hdr->ether_shost, source_mac, 6);
+					memcpy(eth_hdr->ether_dhost, arp_reply.mac, 6);
+
+					printf("Sent Pack after Reply\n");
+					send_to_link(next_route->interface, buf, queued_pack->pack_size);
+				}
+			}
 			printf("ARP implementation\n");
+			continue;
 		}
 
 		if (icmp_hdr != NULL) {
 			printf("ICMP implementation\n");
+			continue;
 		}
 
 		printf("--Implementation ends here--\n");
+		continue;
 	}
 }
 
