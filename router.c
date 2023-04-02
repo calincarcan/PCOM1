@@ -233,13 +233,9 @@ int main(int argc, char *argv[]) {
 		DIE(interface < 0, "recv_from_any_links");
 
 		ether_header *eth_hdr = (ether_header *) buf;
-		printf("eth\n");
 		iphdr *ip_hdr = get_iphdr(eth_hdr);
-		printf("iphdr\n");
 		icmphdr *icmp_hdr = get_icmphdr(eth_hdr);
-		printf("icmphdr\n");
 		arp_header *arp_hdr = get_arphdr(eth_hdr);
-		printf("arphdr\n");
 
 		/* Note that packets received are in network order,
 		any header field which has more than 1 byte will need to be conerted to
@@ -312,6 +308,7 @@ int main(int argc, char *argv[]) {
 				
 				uint16_t len_echo = ntohs(ip_hdr->tot_len) - sizeof(iphdr) - sizeof(icmphdr);
 				printf("len echo request data: %d\n", len_echo);
+
 				generate_ICMP_REPLY(eth_hdr, ip_hdr, icmp_hdr, interface);
 				
 				len = sizeof(ether_header) + sizeof(iphdr) + sizeof(icmphdr) + 48;
@@ -441,14 +438,14 @@ int main(int argc, char *argv[]) {
 						break;
 					}
 				}
+
 				if (found == 1) {
 					printf("arp entry already exits\n");
 					if (queue_empty(arp_queue) == 0) {
 						printf("pack queue not empty\n");
-						exit(11);
 					}
-
 				}
+
 				if (found == 0) {
 					// ARP reply added to cache
 					arp_table[arp_table_len++] = arp_reply;
@@ -485,7 +482,6 @@ int main(int argc, char *argv[]) {
 		}
 
 		printf("--Router loop ends here--\n");
-		continue;
 	}
 }
 
