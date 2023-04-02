@@ -249,6 +249,7 @@ int main(int argc, char *argv[]) {
 			memcpy(eth_hdr->ether_dhost, next_arp->mac, 6);
 			
 			send_to_link(next_route->interface, buf, len);
+			printf("IPv4 Implementation ended\n");
 			continue;
 		}
 		
@@ -266,8 +267,6 @@ int main(int argc, char *argv[]) {
 				uint32_t local_ip = ip_to_uint32(get_interface_ip(interface));
 				// Check if the router is the target ip
 				// then build ARP Reply
-				afisare(searched_ip);
-				afisare(local_ip);
 				if (searched_ip == local_ip) {
 					uint8_t l2_target[6];
 					uint8_t l2_source[6];
@@ -319,7 +318,12 @@ int main(int argc, char *argv[]) {
 					}
 				}
 				if (found == 1) {
-					printf("found is 1\n");
+					printf("arp entry already exits\n");
+					if (queue_empty(arp_queue) == 0) {
+						printf("pack queue not empty\n");
+						exit(11);
+					}
+
 				}
 				if (found == 0) {
 					// ARP reply added to cache
@@ -345,16 +349,16 @@ int main(int argc, char *argv[]) {
 					send_to_link(next_route->interface, buf, queued_pack->pack_size);
 				}
 			}
-			printf("ARP implementation\n");
+			printf("ARP implementation ended\n");
 			continue;
 		}
 
 		if (icmp_hdr != NULL) {
-			printf("ICMP implementation\n");
+			printf("ICMP implementation ended\n");
 			continue;
 		}
 
-		printf("--Implementation ends here--\n");
+		printf("--Router loop ends here--\n");
 		continue;
 	}
 }
