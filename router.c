@@ -182,21 +182,14 @@ void generate_ICMP_REPLY(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr
 
 rtable_entry *get_best_route(uint32_t ip_dest) {
 	rtable_entry *next = NULL;
-	uint32_t i = 0; 
-	uint32_t j = rtable_len - 1;
-	while (i < j) {
-		uint32_t m = (i + j) / 2;
-		if ((rtable[m].prefix) == (ip_dest & rtable[m].mask)) {
-			next = &(rtable[m]);
-			i = m + 1;
-		}
-		if ((rtable[m].prefix) < (ip_dest & rtable[m].mask)) {
-			i = m + 1;
-		}
-		else {
-			j = m - 1;
+	uint32_t best = 0;
+	for (int i = 0; i < rtable_len; i++) {
+			if ((ntohl(rtable[i].mask) & ip_dest) == ntohl(rtable[i].prefix) && best < ntohl(rtable[i].mask)) {
+				next = &(rtable[i]);
+				best = ntohl(rtable[i].mask);
 		}
 	}
+	
 	return next;
 }
 
@@ -323,7 +316,7 @@ int main(int argc, char *argv[]) {
 			}
 
 			// Check for next route
-			rtable_entry *next_route = get_best_route(ip_hdr->daddr);
+			rtable_entry *next_route = get_best_route(ntohl(ip_hdr->daddr));
 			if (next_route == NULL) {
 				printf("--Next Route Not Found--\n");
 				printf("Generating ICMP Destination Unreachable\n");
@@ -459,7 +452,7 @@ int main(int argc, char *argv[]) {
 					memcpy(buf, queued_pack->pack, queued_pack->pack_size);
 					ip_hdr = get_iphdr(eth_hdr);
 
-					rtable_entry *next_route = get_best_route(ip_hdr->daddr);
+					rtable_entry *next_route = get_best_route(ntohl(ip_hdr->daddr));
 					if (next_route == NULL) {
 						printf("--Next Route Not Found--\n");
 						printf("Generating ICMP Destination Unreachable\n");
