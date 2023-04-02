@@ -39,21 +39,18 @@ struct iphdr {
 
 struct icmphdr
 {
-  uint8_t type;                /* message type */
-  uint8_t code;                /* type sub-code */
-  uint16_t checksum;
-  union
-  {
-    struct
-    {
+  uint8_t             type;        /* message type */
+  uint8_t             code;        /* type sub-code */
+  uint16_t            checksum;
+  union {
+    struct {
       uint16_t        id;
       uint16_t        sequence;
-    } echo;                        /* echo datagram */
-    uint32_t        gateway;        /* gateway address */
-    struct
-    {
+    }                 echo;        /* echo datagram */
+    uint32_t          gateway;     /* gateway address */
+    struct {
       uint16_t        __unused;
       uint16_t        mtu;
-    } frag;                        /* path mtu discovery */
-  } un;
+    }                 frag;        /* path mtu discovery */
+  }                   un;
 };

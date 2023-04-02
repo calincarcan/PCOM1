@@ -11,6 +11,19 @@ typedef struct route_table_entry rtable_entry;
 typedef struct arp_entry arp_entry;
 #define MAX_RTABLE_LEN 100000
 
+void afisare(uint32_t addr);
+iphdr *get_iphdr(ether_header* frame);
+icmphdr *get_icmphdr(ether_header* frame);
+arp_header *get_arphdr(ether_header* frame);
+arp_entry generate_arp_entry(uint32_t ip, uint8_t *mac);
+void generate_eth_header(ether_header* buf, uint16_t eth_type, uint8_t *source, uint8_t *target);
+void generate_arp_request(arp_header* arp_hdr, uint8_t *sha, uint32_t spa, uint32_t tpa);
+void generate_arp_reply(arp_header* arp_hdr, uint8_t *sha, uint8_t *tha, uint32_t spa, uint32_t tpa);
+void generate_ICMP(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr, int interface, uint8_t type);
+rtable_entry *get_best_route(uint32_t ip_dest);
+arp_entry *get_arp_entry(uint32_t ip_dest);
+uint32_t ip_to_uint32(char* ip_address);
+
 struct queued_pack {
 	uint8_t pack[MAX_PACKET_LEN];
 	size_t pack_size;
@@ -36,6 +49,13 @@ iphdr *get_iphdr(ether_header* frame) {
 
 icmphdr *get_icmphdr(ether_header* frame) {
 	icmphdr *header = NULL;
+	iphdr* ip_hdr = get_iphdr(frame);
+	if (ip_hdr == NULL) {
+		return NULL;
+	}
+	if (ip_hdr->protocol == 1) {
+		header = (icmphdr*)((char*)ip_hdr + sizeof(iphdr));
+	}
 	return header;
 }
 
@@ -87,6 +107,42 @@ void generate_arp_reply(arp_header* arp_hdr, uint8_t *sha, uint8_t *tha, uint32_
 	arp_hdr->spa = htonl(spa);
 	memcpy(arp_hdr->tha, tha, 6);
 	arp_hdr->tpa = htonl(tpa);
+}
+
+void generate_ICMP(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr, int interface, uint8_t type) {
+	uint8_t l2_source[6];
+	uint8_t l2_target[6];
+	get_interface_mac(interface, l2_source);
+	memcpy(l2_target, eth_hdr->ether_shost, 6);
+	uint32_t s_ip = ip_to_uint32(get_interface_ip(interface));
+	uint32_t t_ip = ntohl(ip_hdr->saddr);
+	uint8_t ipv4_header[20];
+	uint8_t datagram_part[8];
+	memcpy(ipv4_header, ip_hdr, 20);
+	memcpy(datagram_part, ((char*)ip_hdr + sizeof(iphdr)), 8);
+
+	generate_eth_header(eth_hdr, htons(0x800), l2_source, l2_target);
+	ip_hdr->check = 0;
+	ip_hdr->daddr = htonl(t_ip);
+	ip_hdr->frag_off = 0;
+	ip_hdr->id = ntohs(1);
+	ip_hdr->ihl = 5;
+	ip_hdr->protocol = 1;
+	ip_hdr->saddr = htonl(s_ip);
+	ip_hdr->tos = 0;
+	ip_hdr->tot_len = htons(2 * sizeof(iphdr) + sizeof(icmphdr) + 8);
+	ip_hdr->ttl = 255;
+	ip_hdr->version = 4;
+	ip_hdr->check = htons(checksum((uint16_t*)ip_hdr, sizeof(iphdr)));
+
+	icmp_hdr = get_icmphdr(eth_hdr);
+	icmp_hdr->checksum = 0;
+	icmp_hdr->code = 0;
+	icmp_hdr->type = type;
+	memset((char*)icmp_hdr + 4, 0x00, 4);
+	memcpy((char*)icmp_hdr + sizeof(icmphdr), ipv4_header, 20);
+	memcpy((char*)icmp_hdr + sizeof(icmphdr) + 20, datagram_part, 8);
+	icmp_hdr->checksum = htons(checksum((uint16_t*)icmp_hdr, sizeof(icmphdr) + sizeof(iphdr) + 8));
 }
 
 // Liniar LPM, needs to be improved
@@ -142,9 +198,13 @@ int main(int argc, char *argv[]) {
 		DIE(interface < 0, "recv_from_any_links");
 
 		ether_header *eth_hdr = (ether_header *) buf;
+		printf("eth\n");
 		iphdr *ip_hdr = get_iphdr(eth_hdr);
+		printf("iphdr\n");
 		icmphdr *icmp_hdr = get_icmphdr(eth_hdr);
+		printf("icmphdr\n");
 		arp_header *arp_hdr = get_arphdr(eth_hdr);
+		printf("arphdr\n");
 
 		/* Note that packets received are in network order,
 		any header field which has more than 1 byte will need to be conerted to
@@ -196,7 +256,14 @@ int main(int argc, char *argv[]) {
 			// Check for valid TTL
 			if (old_ttl < 2) {
 				printf("--No TTL--\n");
-				// TODO: Implementare mesaj ICMP "Time Exceeded"
+				printf("Generating ICMP Time Exceeded\n");
+
+				generate_ICMP(eth_hdr, ip_hdr, icmp_hdr, interface, 11);
+
+				len = sizeof(ether_header) + 2 * sizeof(iphdr) + sizeof(icmphdr) + 8;
+				send_to_link(interface, buf, len);
+				printf("Sent ICMP Time Exceeded\n");
+
 				continue;
 			}
 			// Updated TTL
@@ -206,7 +273,14 @@ int main(int argc, char *argv[]) {
 			rtable_entry *next_route = get_best_route(ntohl(ip_hdr->daddr));
 			if (next_route == NULL) {
 				printf("--Next Route Not Found--\n");
-				// TODO: Implementare mesaj ICMP "Destination unreachable"
+				printf("Generating ICMP Destination Unreachable\n");
+				
+				generate_ICMP(eth_hdr, ip_hdr, icmp_hdr, interface, 3);
+
+				len = sizeof(ether_header) + 2 * sizeof(iphdr) + sizeof(icmphdr) + 8;
+				send_to_link(interface, buf, len);
+				printf("Sent ICMP Destination Unreachable\n");
+
 				continue;
 			}
 			printf("route\n");
@@ -274,7 +348,6 @@ int main(int argc, char *argv[]) {
 					uint32_t t_ip = ntohl(arp_hdr->tpa);
 					uint8_t l3_source[6]; // mac sursa de la care a venit request
 					
-					//! l3_source cred ca ar putea fi 0x00000
 					memcpy(l3_source, arp_hdr->sha, 6);
 					memcpy(l2_target, eth_hdr->ether_shost, 6);
 
@@ -336,7 +409,14 @@ int main(int argc, char *argv[]) {
 					rtable_entry *next_route = get_best_route(ntohl(ip_hdr->daddr));
 					if (next_route == NULL) {
 						printf("--Next Route Not Found--\n");
-						// TODO: Implementare mesaj ICMP "Destination unreachable"
+						printf("Generating ICMP Destination Unreachable\n");
+						
+						generate_ICMP(eth_hdr, ip_hdr, icmp_hdr, interface, 3);
+
+						len = sizeof(ether_header) + 2 * sizeof(iphdr) + sizeof(icmphdr) + 8;
+						send_to_link(interface, buf, len);
+						printf("Sent ICMP Destination Unreachable\n");
+
 						continue;
 					}
 
