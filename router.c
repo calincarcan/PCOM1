@@ -20,6 +20,7 @@ void generate_eth_header(ether_header* buf, uint16_t eth_type, uint8_t *source, 
 void generate_arp_request(arp_header* arp_hdr, uint8_t *sha, uint32_t spa, uint32_t tpa);
 void generate_arp_reply(arp_header* arp_hdr, uint8_t *sha, uint8_t *tha, uint32_t spa, uint32_t tpa);
 void generate_ICMP(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr, int interface, uint8_t type);
+void generate_ICMP_REPLY(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr, int interface);
 rtable_entry *get_best_route(uint32_t ip_dest);
 arp_entry *get_arp_entry(uint32_t ip_dest);
 uint32_t ip_to_uint32(char* ip_address);
@@ -143,6 +144,40 @@ void generate_ICMP(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr, int 
 	memcpy((char*)icmp_hdr + sizeof(icmphdr), ipv4_header, 20);
 	memcpy((char*)icmp_hdr + sizeof(icmphdr) + 20, datagram_part, 8);
 	icmp_hdr->checksum = htons(checksum((uint16_t*)icmp_hdr, sizeof(icmphdr) + sizeof(iphdr) + 8));
+}
+
+void generate_ICMP_REPLY(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr, int interface) {
+	uint8_t l2_source[6];
+	uint8_t l2_target[6];
+	get_interface_mac(interface, l2_source);
+	memcpy(l2_target, eth_hdr->ether_shost, 6);
+	uint32_t s_ip = ip_to_uint32(get_interface_ip(interface));
+	uint32_t t_ip = ntohl(ip_hdr->saddr);
+
+	generate_eth_header(eth_hdr, htons(0x800), l2_source, l2_target);
+	ip_hdr->check = 0;
+	ip_hdr->daddr = htonl(t_ip);
+	ip_hdr->frag_off = 0;
+	ip_hdr->id = ntohs(1);
+	ip_hdr->ihl = 5;
+	ip_hdr->protocol = 1;
+	ip_hdr->saddr = htonl(s_ip);
+	ip_hdr->tos = 0;
+	ip_hdr->tot_len = htons(sizeof(iphdr) + sizeof(icmphdr) + 48);
+	ip_hdr->ttl = 255;
+	ip_hdr->version = 4;
+	ip_hdr->check = htons(checksum((uint16_t*)ip_hdr, sizeof(iphdr)));
+
+	uint8_t old_icmp[48];
+	memcpy(old_icmp, (char*)icmp_hdr + sizeof(icmphdr), 48);
+	icmp_hdr = get_icmphdr(eth_hdr);
+	icmp_hdr->checksum = 0;
+	icmp_hdr->code = 0;
+	icmp_hdr->type = 0;
+	icmp_hdr->un.echo.id = 0;
+	icmp_hdr->un.echo.sequence = 0;
+	memcpy((char*)icmp_hdr + sizeof(icmphdr), old_icmp, 48);
+	icmp_hdr->checksum = htons(checksum((uint16_t*)icmp_hdr, sizeof(icmphdr) + 48));
 }
 
 // Liniar LPM, needs to be improved
@@ -269,6 +304,22 @@ int main(int argc, char *argv[]) {
 			// Updated TTL
 			ip_hdr->ttl--;
 			printf("ttl\n");
+
+			// Check if the router is the destination
+			uint32_t local_ip = ip_to_uint32(get_interface_ip(interface));
+			if (local_ip == ntohl(ip_hdr->daddr)) {
+				printf("Got ICMP Echo Request\n");
+				
+				uint16_t len_echo = ntohs(ip_hdr->tot_len) - sizeof(iphdr) - sizeof(icmphdr);
+				printf("len echo request data: %d\n", len_echo);
+				generate_ICMP_REPLY(eth_hdr, ip_hdr, icmp_hdr, interface);
+				
+				len = sizeof(ether_header) + sizeof(iphdr) + sizeof(icmphdr) + 48;
+				send_to_link(interface, buf, len);
+				printf("Sent ICMP Echo Reply\n");
+				continue;
+			}
+
 			// Check for next route
 			rtable_entry *next_route = get_best_route(ntohl(ip_hdr->daddr));
 			if (next_route == NULL) {
@@ -430,11 +481,6 @@ int main(int argc, char *argv[]) {
 				}
 			}
 			printf("ARP implementation ended\n");
-			continue;
-		}
-
-		if (icmp_hdr != NULL) {
-			printf("ICMP implementation ended\n");
 			continue;
 		}
 
