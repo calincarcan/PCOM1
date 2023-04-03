@@ -363,67 +363,14 @@ int read_trie(const char *path, trie routing_trie) {
 }
 
 int main(int argc, char *argv[]) {
-	// rtable = malloc(sizeof(rtable_entry) * MAX_RTABLE_LEN);
-	// DIE(rtable == NULL, "rtable memory");
 
 	arp_table = malloc(sizeof(arp_entry) * MAX_ARP_TABLE_LEN);
 	DIE(arp_table == NULL, "arptable memory");
 
-	// rtable_len = read_rtable(argv[1], rtable);
 	routing_trie = create_trie();
-	// for (int i = 0; i < rtable_len; i++) {
-	// 	routing_trie = add_to_trie(routing_trie, rtable[i].prefix, &(rtable[i]));
-	// }
-	// int success_trie = read_trie(argv[1], routing_trie);
-	// DIE(success_trie != 1, "routing trie reading");
-	// printf("Read the Trie\n");
-	struct route_table_entry *cv = calloc(1, sizeof(struct route_table_entry));
-	cv->mask = htonl(0xffffff00);
-	cv->prefix = htonl(ip_to_uint32("192.1.4.0"));
-	cv->interface = htonl(1);
-	cv->next_hop = htonl(ip_to_uint32("192.1.4.2"));
-	
-	// adresa = 28 biti 1011
-	// prefix = 28 biti 0000
-	routing_trie = add_to_trie(routing_trie, (ip_to_uint32("192.1.4.0")), cv);
-
-
-	struct route_table_entry *new = calloc(1, sizeof(struct route_table_entry));
-	
-	new = get_best_route(ip_to_uint32("192.1.4.133"));
-	// new = find_info(routing_trie, ip_to_uint32("192.1.4.133"));
-	if (new)
-		printf("am gasit\n");
-		else {
-			printf("nu am gasit\n");
-		}
-	printf("\n\n\n\n\n\n\n");
-
-	// cv->mask = htonl(0xffffffff);
-	// cv->prefix = htonl(ip_to_uint32("192.1.4.0"));
-	// cv->interface = htonl(1);
-	// cv->next_hop = htonl(ip_to_uint32("192.1.4.2"));
-	// routing_trie = add_to_trie(routing_trie, (ip_to_uint32("192.1.4.0")), cv);
-
-	// new = find_info(routing_trie, ip_to_uint32("192.1.4.255"));
-	// if (new)
-	// 	printf("\n%p\n", new);
-
-	// printf("%u\n", (ip_to_uint32("192.1.4.0")));
-	// printf("htonl%u\n", htonl(ip_to_uint32("192.1.4.0")));
-	// printf("%u\n", (ip_to_uint32("192.1.4.2") & 0xffffff00));
-
-
-	// for (uint32_t mask = 0xffffffff; mask != 0; mask<<=1) {
-	// 	new = find_info(routing_trie, ip_to_uint32("192.1.4.0"));
-	// 	if (new)
-	// 		printf("\n%p\n", new);
-	// }
-	
-
-	// printf("%p\n", find_info(routing_trie, ip_to_uint32("192.9.42.0")));
-	// printf("%u\n", ntohl(find_info(routing_trie, ip_to_uint32("192.9.42.130"))->mask));
-	exit(11);
+	int success_trie = read_trie(argv[1], routing_trie);
+	DIE(success_trie != 1, "routing trie reading");
+	printf("Read The Routing Trie\n");
 
 	queue arp_queue = queue_create();
 
@@ -506,15 +453,11 @@ int main(int argc, char *argv[]) {
 			}
 			// Updated TTL
 			ip_hdr->ttl--;
-			printf("ttl\n");
 
 			// Check if the router is the destination
 			uint32_t local_ip = ip_to_uint32(get_interface_ip(interface));
 			if (local_ip == ntohl(ip_hdr->daddr)) {
 				printf("Got ICMP Echo Request\n");
-				
-				uint16_t len_echo = ntohs(ip_hdr->tot_len) - sizeof(iphdr) - sizeof(icmphdr);
-				printf("len echo request data: %d\n", len_echo);
 
 				generate_ICMP_REPLY(eth_hdr, ip_hdr, icmp_hdr, interface);
 				
@@ -538,17 +481,15 @@ int main(int argc, char *argv[]) {
 
 				continue;
 			}
-			printf("route\n");
 			// Updated checksum
 			ip_hdr->check = 0;
 			uint16_t new_checksum = checksum((uint16_t*)ip_hdr, sizeof(iphdr));
 			ip_hdr->check = htons(new_checksum);
 			// Updated source and destination mac in ETH header
 			arp_entry* next_arp = get_arp_entry(ntohl(next_route->next_hop));
-			printf("newcheck\n");
 			// ARP Table returned NULL, queue packet and generate ARP
 			if (next_arp == NULL) {
-				printf("entered arp reqgen\n");
+				printf("Generating ARP Request\n");
 				struct queued_pack *packet = calloc(1, sizeof(struct queued_pack));
 				memcpy(packet->pack, buf, MAX_PACKET_LEN);
 				packet->pack_size = len;
@@ -569,10 +510,9 @@ int main(int argc, char *argv[]) {
 				generate_arp_request(arp_hdr, source, spa, tpa);
 				send_to_link(next_route->interface, buf, sizeof(ether_header) + sizeof(arp_header));
 
-				printf("sent request\n");
+				printf("Sent ARP Request\n");
 				continue;
 			}
-			printf("found next arp\n");
 			
 			get_interface_mac(next_route->interface, (eth_hdr->ether_shost));
 			memcpy(eth_hdr->ether_dhost, next_arp->mac, 6);
@@ -643,13 +583,6 @@ int main(int argc, char *argv[]) {
 					if (arp_table[i].ip == arp_reply.ip && same_mac == 0) {
 						found = 1;
 						break;
-					}
-				}
-
-				if (found == 1) {
-					printf("arp entry already exits\n");
-					if (queue_empty(arp_queue) == 0) {
-						printf("pack queue not empty\n");
 					}
 				}
 
