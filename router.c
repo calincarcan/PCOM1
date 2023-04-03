@@ -36,11 +36,6 @@ typedef struct trie_cell {
     struct trie_cell *left, *right;
 } *trie, trie_cell;
 
-// struct net_list {
-// 	rtable_entry list[20];
-// 	int size;
-// };
-
 trie routing_trie;
 
 uint32_t nr_biti(uint32_t number) {
@@ -60,12 +55,10 @@ trie create_trie() {
 trie add_to_trie(trie root, uint32_t number, rtable_entry* info) {
 	uint32_t current_mask = ntohl(info->mask);
     trie current = root;
-	// printf("took %d steps: \n", nr_biti(current_mask));
     while (current_mask) {
         int step = number & ((unsigned int)0x80000000);
         number <<= 1;
 		current_mask <<= 1;
-		// printf("%d", step != 0);
         if (step == 0) {
             if (current->left == NULL) {
                 current->left = create_trie();
@@ -78,7 +71,6 @@ trie add_to_trie(trie root, uint32_t number, rtable_entry* info) {
             current = current->right;
         }
 	}
-	// printf("\n");
 	current->elem = calloc(1, sizeof(rtable_entry));
 	rtable_entry* point = current->elem;
 	*point = *info;
@@ -88,45 +80,31 @@ trie add_to_trie(trie root, uint32_t number, rtable_entry* info) {
 struct route_table_entry* find_info(trie root, uint32_t number) {
 	struct route_table_entry* next = NULL;
 	uint32_t copy_addr = number;
-	// uint32_t best_mask = 0;
     trie current = root;
-	// printf("nr biti nr: %d\n", nr_biti(number));
-	// printf("find steps: \n");
-	// printf("\n");
     while (number) {
         int step = number & ((unsigned int)0x80000000);
-		// printf("%d", step != 0);
         if (step == 0) {
             if (current->left == NULL) {
-			// printf("\nunreachable\n");
                 return next;
             }
             current = current->left;
         } else {
             if (current->right == NULL) {
-			// printf("\nunreachable\n");
                 return next;
             }
             current = current->right;
         }
 		if (current->elem != NULL) {
-			// printf("\ngasit in curs de cautare\n");
 			rtable_entry* point = current->elem;
 			if ((ntohl(point->mask) & copy_addr) == ntohl(point->prefix)) {
-				// best_mask = ntohl(point->mask);
-				// printf("best_mask: %u cu %u biti\n",best_mask, nr_biti(best_mask));
 				next = point;
 			}
 		}
         number <<= 1; 
     }
-	// printf("\n");
     if (current->elem != NULL) {
-		// printf("\ngasit la final curs de cautare\n");
 		rtable_entry* point = current->elem;
 		if ((ntohl(point->mask) & copy_addr) == ntohl(point->prefix)) {
-			// best_mask = ntohl(point->mask);
-			// printf("best_mask: %u cu %u biti\n",best_mask, nr_biti(best_mask));
 			next = point;
 		}
     }
@@ -295,24 +273,8 @@ void generate_ICMP_REPLY(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr
 	icmp_hdr->checksum = htons(checksum((uint16_t*)icmp_hdr, sizeof(icmphdr) + 48));
 }
 
-//! asdasdasdsaddasdas
 rtable_entry *get_best_route(uint32_t ip_dest) {
-	
-	// for (uint32_t mask = 0xffffffff; mask != 0; mask--) {
-	// 	next = find_info(routing_trie, (ip_dest & mask));
-	// 	if (next != NULL)
-	// 		return next;
-	// }
-
 	return  find_info(routing_trie, ip_dest);
-
-	// uint32_t best = 0;
-	// for (int i = 0; i < rtable_len; i++) {
-	// 		if ((ntohl(rtable[i].mask) & ip_dest) == ntohl(rtable[i].prefix) && best < ntohl(rtable[i].mask)) {
-	// 			next = &(rtable[i]);
-	// 			best = ntohl(rtable[i].mask);
-	// 	}
-	// }
 }
 
 arp_entry *get_arp_entry(uint32_t ip_dest) {
@@ -353,10 +315,6 @@ int read_trie(const char *path, trie routing_trie) {
 			p = strtok(NULL, " .");
 			i++;
 		}
-		// if (ntohl(trie_elem->prefix) == ip_to_uint32("192.168.3.2"))
-		// 	printf("s-a citit la %p\n", trie_elem);
-		// if (trie_elem->prefix == 0xc0a80302)
-		// 	printf("s-a citit2 la %p\n", trie_elem);
 		routing_trie = add_to_trie(routing_trie, ntohl(trie_elem->prefix), trie_elem);
 	}
 	return 1;
@@ -396,7 +354,7 @@ int main(int argc, char *argv[]) {
 		host order. For example, ntohs(eth_hdr->ether_type). The oposite is needed when
 		sending a packet on the link, */
 
-    	uint8_t  interface_mac[6]; // adresa mac a interfetei
+    	uint8_t  interface_mac[6];
 		get_interface_mac(interface, interface_mac);
 		uint8_t correct_destination = 1;
 		for (int i = 0; i < 6; i++) {
