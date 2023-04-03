@@ -26,6 +26,9 @@ rtable_entry *get_best_route(uint32_t ip_dest);
 arp_entry *get_arp_entry(uint32_t ip_dest);
 uint32_t ip_to_uint32(char* ip_address);
 
+arp_entry *arp_table;
+int arp_table_len = 0;
+
 struct queued_pack {
 	uint8_t pack[MAX_PACKET_LEN];
 	size_t pack_size;
@@ -37,15 +40,6 @@ typedef struct trie_cell {
 } *trie, trie_cell;
 
 trie routing_trie;
-
-uint32_t nr_biti(uint32_t number) {
-	uint32_t t = 0;
-	while((number & 0x80000000) != 0) {
-		number <<=1;
-		t++;
-	}
-	return t;
-}
 
 trie create_trie() {
     trie new_trie = calloc(1, sizeof(trie_cell));
@@ -118,19 +112,6 @@ void destroy_trie(trie root) {
     destroy_trie(root->right);
     free(root->elem);
     free(root);
-}
-
-
-rtable_entry *rtable;
-int rtable_len = 0;
-
-arp_entry *arp_table;
-int arp_table_len = 0;
-
-
-
-void afisare(uint32_t addr) {
-	printf("%d.%d.%d.%d\n", (addr>>24)&0xff, (addr>>16)&0xff,(addr>>8)&0xff,addr&0xff);
 }
 
 iphdr *get_iphdr(ether_header* frame) {
