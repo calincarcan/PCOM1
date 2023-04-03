@@ -10,6 +10,7 @@ typedef struct arp_header arp_header;
 typedef struct route_table_entry rtable_entry;
 typedef struct arp_entry arp_entry;
 #define MAX_RTABLE_LEN 100000
+#define MAX_ARP_TABLE_LEN 1000
 
 void afisare(uint32_t addr);
 iphdr *get_iphdr(ether_header* frame);
@@ -30,11 +31,125 @@ struct queued_pack {
 	size_t pack_size;
 };
 
+typedef struct trie_cell {
+    void* elem;
+    struct trie_cell *left, *right;
+} *trie, trie_cell;
+
+// struct net_list {
+// 	rtable_entry list[20];
+// 	int size;
+// };
+
+trie routing_trie;
+
+uint32_t nr_biti(uint32_t number) {
+	uint32_t t = 0;
+	while((number & 0x80000000) != 0) {
+		number <<=1;
+		t++;
+	}
+	return t;
+}
+
+trie create_trie() {
+    trie new_trie = calloc(1, sizeof(trie_cell));
+    return new_trie;
+}
+
+trie add_to_trie(trie root, uint32_t number, rtable_entry* info) {
+	uint32_t current_mask = ntohl(info->mask);
+    trie current = root;
+	// printf("took %d steps: \n", nr_biti(current_mask));
+    while (current_mask) {
+        int step = number & ((unsigned int)0x80000000);
+        number <<= 1;
+		current_mask <<= 1;
+		// printf("%d", step != 0);
+        if (step == 0) {
+            if (current->left == NULL) {
+                current->left = create_trie();
+            }
+            current = current->left;
+        } else {
+            if (current->right == NULL) {
+                current->right = create_trie();
+            }
+            current = current->right;
+        }
+	}
+	// printf("\n");
+	current->elem = calloc(1, sizeof(rtable_entry));
+	rtable_entry* point = current->elem;
+	*point = *info;
+    return root;
+}
+
+struct route_table_entry* find_info(trie root, uint32_t number) {
+	struct route_table_entry* next = NULL;
+	uint32_t copy_addr = number;
+	// uint32_t best_mask = 0;
+    trie current = root;
+	// printf("nr biti nr: %d\n", nr_biti(number));
+	// printf("find steps: \n");
+	// printf("\n");
+    while (number) {
+        int step = number & ((unsigned int)0x80000000);
+		// printf("%d", step != 0);
+        if (step == 0) {
+            if (current->left == NULL) {
+			// printf("\nunreachable\n");
+                return next;
+            }
+            current = current->left;
+        } else {
+            if (current->right == NULL) {
+			// printf("\nunreachable\n");
+                return next;
+            }
+            current = current->right;
+        }
+		if (current->elem != NULL) {
+			// printf("\ngasit in curs de cautare\n");
+			rtable_entry* point = current->elem;
+			if ((ntohl(point->mask) & copy_addr) == ntohl(point->prefix)) {
+				// best_mask = ntohl(point->mask);
+				// printf("best_mask: %u cu %u biti\n",best_mask, nr_biti(best_mask));
+				next = point;
+			}
+		}
+        number <<= 1; 
+    }
+	// printf("\n");
+    if (current->elem != NULL) {
+		// printf("\ngasit la final curs de cautare\n");
+		rtable_entry* point = current->elem;
+		if ((ntohl(point->mask) & copy_addr) == ntohl(point->prefix)) {
+			// best_mask = ntohl(point->mask);
+			// printf("best_mask: %u cu %u biti\n",best_mask, nr_biti(best_mask));
+			next = point;
+		}
+    }
+    return next;
+}
+
+void destroy_trie(trie root) {
+    if (root == NULL)
+        return;
+    destroy_trie(root->left);
+    destroy_trie(root->right);
+    free(root->elem);
+    free(root);
+}
+
+
 rtable_entry *rtable;
 int rtable_len = 0;
 
 arp_entry *arp_table;
 int arp_table_len = 0;
+
+
 
 void afisare(uint32_t addr) {
 	printf("%d.%d.%d.%d\n", (addr>>24)&0xff, (addr>>16)&0xff,(addr>>8)&0xff,addr&0xff);
@@ -180,17 +295,24 @@ void generate_ICMP_REPLY(ether_header* eth_hdr, iphdr* ip_hdr, icmphdr* icmp_hdr
 	icmp_hdr->checksum = htons(checksum((uint16_t*)icmp_hdr, sizeof(icmphdr) + 48));
 }
 
+//! asdasdasdsaddasdas
 rtable_entry *get_best_route(uint32_t ip_dest) {
-	rtable_entry *next = NULL;
-	uint32_t best = 0;
-	for (int i = 0; i < rtable_len; i++) {
-			if ((ntohl(rtable[i].mask) & ip_dest) == ntohl(rtable[i].prefix) && best < ntohl(rtable[i].mask)) {
-				next = &(rtable[i]);
-				best = ntohl(rtable[i].mask);
-		}
-	}
 	
-	return next;
+	// for (uint32_t mask = 0xffffffff; mask != 0; mask--) {
+	// 	next = find_info(routing_trie, (ip_dest & mask));
+	// 	if (next != NULL)
+	// 		return next;
+	// }
+
+	return  find_info(routing_trie, ip_dest);
+
+	// uint32_t best = 0;
+	// for (int i = 0; i < rtable_len; i++) {
+	// 		if ((ntohl(rtable[i].mask) & ip_dest) == ntohl(rtable[i].prefix) && best < ntohl(rtable[i].mask)) {
+	// 			next = &(rtable[i]);
+	// 			best = ntohl(rtable[i].mask);
+	// 	}
+	// }
 }
 
 arp_entry *get_arp_entry(uint32_t ip_dest) {
@@ -207,15 +329,102 @@ uint32_t ip_to_uint32(char* ip_address) {
     return ntohl(addr.s_addr);
 }
 
-int main(int argc, char *argv[]) {
-	rtable = malloc(sizeof(rtable_entry) * MAX_RTABLE_LEN);
-	DIE(rtable == NULL, "rtable memory");
+int read_trie(const char *path, trie routing_trie) {
+	FILE *fp = fopen(path, "r");
+	int i;
+	char *p, line[64];
 
-	arp_table = malloc(sizeof(arp_entry) * MAX_RTABLE_LEN);
+	while (fgets(line, sizeof(line), fp) != NULL) {
+		rtable_entry* trie_elem = malloc(sizeof(rtable_entry));
+		p = strtok(line, " .");
+		i = 0;
+		while (p != NULL) {
+			if (i < 4)
+				*(((unsigned char *)&trie_elem->prefix)  + i % 4) = (unsigned char)atoi(p);
+
+			if (i >= 4 && i < 8)
+				*(((unsigned char *)&trie_elem->next_hop)  + i % 4) = atoi(p);
+
+			if (i >= 8 && i < 12)
+				*(((unsigned char *)&trie_elem->mask)  + i % 4) = atoi(p);
+
+			if (i == 12)
+				trie_elem->interface = atoi(p);
+			p = strtok(NULL, " .");
+			i++;
+		}
+		// if (ntohl(trie_elem->prefix) == ip_to_uint32("192.168.3.2"))
+		// 	printf("s-a citit la %p\n", trie_elem);
+		// if (trie_elem->prefix == 0xc0a80302)
+		// 	printf("s-a citit2 la %p\n", trie_elem);
+		routing_trie = add_to_trie(routing_trie, ntohl(trie_elem->prefix), trie_elem);
+	}
+	return 1;
+}
+
+int main(int argc, char *argv[]) {
+	// rtable = malloc(sizeof(rtable_entry) * MAX_RTABLE_LEN);
+	// DIE(rtable == NULL, "rtable memory");
+
+	arp_table = malloc(sizeof(arp_entry) * MAX_ARP_TABLE_LEN);
 	DIE(arp_table == NULL, "arptable memory");
 
-	rtable_len = read_rtable(argv[1], rtable);
-	// arp_table_len = parse_arp_table("arp_table.txt", arp_table);
+	// rtable_len = read_rtable(argv[1], rtable);
+	routing_trie = create_trie();
+	// for (int i = 0; i < rtable_len; i++) {
+	// 	routing_trie = add_to_trie(routing_trie, rtable[i].prefix, &(rtable[i]));
+	// }
+	// int success_trie = read_trie(argv[1], routing_trie);
+	// DIE(success_trie != 1, "routing trie reading");
+	// printf("Read the Trie\n");
+	struct route_table_entry *cv = calloc(1, sizeof(struct route_table_entry));
+	cv->mask = htonl(0xffffff00);
+	cv->prefix = htonl(ip_to_uint32("192.1.4.0"));
+	cv->interface = htonl(1);
+	cv->next_hop = htonl(ip_to_uint32("192.1.4.2"));
+	
+	// adresa = 28 biti 1011
+	// prefix = 28 biti 0000
+	routing_trie = add_to_trie(routing_trie, (ip_to_uint32("192.1.4.0")), cv);
+
+
+	struct route_table_entry *new = calloc(1, sizeof(struct route_table_entry));
+	
+	new = get_best_route(ip_to_uint32("192.1.4.133"));
+	// new = find_info(routing_trie, ip_to_uint32("192.1.4.133"));
+	if (new)
+		printf("am gasit\n");
+		else {
+			printf("nu am gasit\n");
+		}
+	printf("\n\n\n\n\n\n\n");
+
+	// cv->mask = htonl(0xffffffff);
+	// cv->prefix = htonl(ip_to_uint32("192.1.4.0"));
+	// cv->interface = htonl(1);
+	// cv->next_hop = htonl(ip_to_uint32("192.1.4.2"));
+	// routing_trie = add_to_trie(routing_trie, (ip_to_uint32("192.1.4.0")), cv);
+
+	// new = find_info(routing_trie, ip_to_uint32("192.1.4.255"));
+	// if (new)
+	// 	printf("\n%p\n", new);
+
+	// printf("%u\n", (ip_to_uint32("192.1.4.0")));
+	// printf("htonl%u\n", htonl(ip_to_uint32("192.1.4.0")));
+	// printf("%u\n", (ip_to_uint32("192.1.4.2") & 0xffffff00));
+
+
+	// for (uint32_t mask = 0xffffffff; mask != 0; mask<<=1) {
+	// 	new = find_info(routing_trie, ip_to_uint32("192.1.4.0"));
+	// 	if (new)
+	// 		printf("\n%p\n", new);
+	// }
+	
+
+	// printf("%p\n", find_info(routing_trie, ip_to_uint32("192.9.42.0")));
+	// printf("%u\n", ntohl(find_info(routing_trie, ip_to_uint32("192.9.42.130"))->mask));
+	exit(11);
+
 	queue arp_queue = queue_create();
 
 	int interface;
